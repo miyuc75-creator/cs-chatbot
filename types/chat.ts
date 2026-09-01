@@ -32,5 +32,6 @@ export interface EscalationDecision {
     | "no_faq_match"
     | "low_confidence"
     | "return_action"
+    | "search_unavailable"
     | null;
 }

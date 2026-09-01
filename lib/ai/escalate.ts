@@ -52,6 +52,8 @@ const HANDOFF_MESSAGES: Record<NonNullable<EscalationDecision["reason"]>, string
     "恐れ入りますが、こちらでは正確にお答えしかねる内容のため、オペレーターに確認いたします。少々お待ちください。",
   return_action:
     "返品・交換のお手続きは、内容を確認の上オペレーターより改めてご案内いたします。少々お待ちください。",
+  search_unavailable:
+    "恐れ入りますが、こちらでは正確にお答えしかねる内容のため、オペレーターに確認いたします。少々お待ちください。",
 };
 
 const OUT_OF_HOURS_SUFFIX =
