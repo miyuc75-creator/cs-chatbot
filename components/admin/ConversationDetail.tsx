@@ -149,7 +149,7 @@ export function ConversationDetail({
         <button
           type="submit"
           disabled={isSending || !input.trim()}
-          className="rounded-full bg-blue-600 px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
+          className="rounded-full bg-emerald-600 px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
           送信
         </button>

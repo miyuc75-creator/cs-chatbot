@@ -1,9 +1,9 @@
 import type { ChatMessage } from "@/types/chat";
 
 const SENDER_STYLES: Record<ChatMessage["sender"], string> = {
-  customer: "self-start bg-zinc-100 text-zinc-900",
-  ai: "self-start bg-violet-50 text-violet-950",
-  operator: "self-end bg-blue-600 text-white",
+  customer: "self-start bg-emerald-100 text-emerald-950",
+  ai: "self-start bg-zinc-100 text-zinc-900",
+  operator: "self-end bg-emerald-600 text-white",
 };
 
 const SENDER_LABELS: Record<ChatMessage["sender"], string> = {

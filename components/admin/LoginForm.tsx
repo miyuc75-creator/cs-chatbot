@@ -64,7 +64,7 @@ export function LoginForm({ initialError }: { initialError?: string }) {
       <button
         type="submit"
         disabled={isSubmitting}
-        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+        className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
       >
         ログイン
       </button>
