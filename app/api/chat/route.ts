@@ -1,0 +1,173 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { createClient as createServerClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { searchKnowledgeItemsForQuestions } from "@/lib/rag/search";
+import { analyzeInquiry } from "@/lib/ai/classify";
+import { generateAnswer } from "@/lib/ai/respond";
+import { decideEscalation, buildHandoffMessage } from "@/lib/ai/escalate";
+import { notifyEscalation } from "@/lib/resend/notify";
+import type { ChatMessage, ChatSendRequest, ChatSendResponse } from "@/types/chat";
+import type { ConversationRow } from "@/types/database";
+
+const requestSchema = z.object({
+  conversationId: z.string().uuid().nullable(),
+  message: z.string().trim().min(1).max(2000),
+});
+
+export async function POST(request: Request) {
+  const auth = await createServerClient();
+  const {
+    data: { user },
+  } = await auth.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "認証が必要です" }, { status: 401 });
+  }
+
+  const parseResult = requestSchema.safeParse(
+    (await request.json()) as ChatSendRequest
+  );
+  if (!parseResult.success) {
+    return NextResponse.json({ error: "不正なリクエストです" }, { status: 400 });
+  }
+  const { conversationId, message } = parseResult.data;
+
+  const admin = createAdminClient();
+
+  const conversation = await resolveConversation(admin, user.id, conversationId);
+  if (!conversation) {
+    return NextResponse.json({ error: "問い合わせが見つかりません" }, { status: 404 });
+  }
+
+  await insertMessage(admin, conversation.id, "customer", message);
+
+  // すでに有人対応へ引き継ぎ済みの場合、AIは処理せず受付のみ行う。
+  if (conversation.status !== "ai_active") {
+    const reply = await insertMessage(
+      admin,
+      conversation.id,
+      "ai",
+      "メッセージを受け付けました。オペレーターが確認次第ご案内します。"
+    );
+    return NextResponse.json(
+      buildResponse(conversation.id, conversation.status, conversation.category, reply)
+    );
+  }
+
+  const history = await fetchHistory(admin, conversation.id);
+  const { category, subQuestions, isActionRequest } = await analyzeInquiry(message);
+
+  // クレーム・判断不能・返品実行依頼はFAQの一致に関わらず有人対応になるため、
+  // Embedding APIの呼び出し(レート制限が厳しい)を節約するためFAQ検索自体を行わない。
+  const skipsFaqSearch =
+    category === "complaint" ||
+    category === "undetermined" ||
+    (category === "return_exchange" && isActionRequest);
+  const faqMatches = skipsFaqSearch ? [] : await searchKnowledgeItemsForQuestions(subQuestions);
+  const decision = decideEscalation(category, faqMatches, isActionRequest);
+
+  if (decision.shouldEscalate && decision.reason) {
+    await admin
+      .from("conversations")
+      .update({ status: "waiting_operator", category })
+      .eq("id", conversation.id);
+
+    const reply = await insertMessage(
+      admin,
+      conversation.id,
+      "ai",
+      buildHandoffMessage(decision.reason)
+    );
+
+    await notifyEscalation(conversation.id, category);
+
+    return NextResponse.json(
+      buildResponse(conversation.id, "waiting_operator", category, reply)
+    );
+  }
+
+  await admin.from("conversations").update({ category }).eq("id", conversation.id);
+
+  const answer = await generateAnswer(message, faqMatches, history);
+  const reply = await insertMessage(admin, conversation.id, "ai", answer);
+
+  return NextResponse.json(buildResponse(conversation.id, "ai_active", category, reply));
+}
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+
+async function resolveConversation(
+  admin: AdminClient,
+  customerId: string,
+  conversationId: string | null
+): Promise<ConversationRow | null> {
+  if (conversationId) {
+    const { data } = await admin
+      .from("conversations")
+      .select("*")
+      .eq("id", conversationId)
+      .eq("customer_id", customerId)
+      .maybeSingle();
+    return data;
+  }
+
+  const { data, error } = await admin
+    .from("conversations")
+    .insert({ customer_id: customerId })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(`問い合わせの作成に失敗しました: ${error.message}`);
+  }
+  return data;
+}
+
+async function insertMessage(
+  admin: AdminClient,
+  conversationId: string,
+  sender: ChatMessage["sender"],
+  content: string
+): Promise<ChatMessage> {
+  const { data, error } = await admin
+    .from("messages")
+    .insert({ conversation_id: conversationId, sender, content })
+    .select("id, sender, content, created_at")
+    .single();
+
+  if (error) {
+    throw new Error(`メッセージの保存に失敗しました: ${error.message}`);
+  }
+
+  return { id: data.id, sender: data.sender, content: data.content, createdAt: data.created_at };
+}
+
+async function fetchHistory(admin: AdminClient, conversationId: string): Promise<ChatMessage[]> {
+  const { data, error } = await admin
+    .from("messages")
+    .select("id, sender, content, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true })
+    .limit(20);
+
+  if (error) {
+    throw new Error(`会話履歴の取得に失敗しました: ${error.message}`);
+  }
+
+  return (data ?? []).map((m) => ({
+    id: m.id,
+    sender: m.sender,
+    content: m.content,
+    createdAt: m.created_at,
+  }));
+}
+
+function buildResponse(
+  conversationId: string,
+  status: ConversationRow["status"],
+  category: ConversationRow["category"],
+  reply: ChatMessage
+): ChatSendResponse {
+  return { conversationId, status, category, reply };
+}

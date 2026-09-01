@@ -1,0 +1,24 @@
+import type { ChatMessage } from "@/types/chat";
+
+const SENDER_STYLES: Record<ChatMessage["sender"], string> = {
+  customer: "self-start bg-zinc-100 text-zinc-900",
+  ai: "self-start bg-violet-50 text-violet-950",
+  operator: "self-end bg-blue-600 text-white",
+};
+
+const SENDER_LABELS: Record<ChatMessage["sender"], string> = {
+  customer: "顧客",
+  ai: "AI",
+  operator: "オペレーター",
+};
+
+export function AdminMessageBubble({ message }: { message: ChatMessage }) {
+  return (
+    <div
+      className={`flex max-w-[80%] flex-col gap-1 rounded-2xl px-4 py-2 ${SENDER_STYLES[message.sender]}`}
+    >
+      <span className="text-xs opacity-70">{SENDER_LABELS[message.sender]}</span>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+    </div>
+  );
+}

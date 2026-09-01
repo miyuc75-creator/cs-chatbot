@@ -13,55 +13,56 @@ export type ConversationCategory =
 
 export type MessageSender = "customer" | "ai" | "operator";
 
-export interface ConversationRow {
+export type ConversationRow = {
   id: string;
   customer_id: string;
   status: ConversationStatus;
   category: ConversationCategory | null;
   created_at: string;
   updated_at: string;
-}
+};
 
-export interface MessageRow {
+export type MessageRow = {
   id: string;
   conversation_id: string;
   sender: MessageSender;
   content: string;
   created_at: string;
-}
+};
 
-export interface KnowledgeItemRow {
+export type KnowledgeItemRow = {
   id: string;
   question: string;
   answer: string;
   category: string;
   embedding: number[] | null;
   created_at: string;
-}
+};
 
-export interface OperatorRow {
+export type OperatorRow = {
   id: string;
   email: string;
   name: string;
   role: string;
   created_at: string;
-}
+};
 
-export interface MatchKnowledgeItemResult {
+export type MatchKnowledgeItemResult = {
   id: string;
   question: string;
   answer: string;
   category: string;
   similarity: number;
-}
+};
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
       conversations: {
         Row: ConversationRow;
         Insert: Partial<ConversationRow> & { customer_id: string };
         Update: Partial<ConversationRow>;
+        Relationships: [];
       };
       messages: {
         Row: MessageRow;
@@ -71,6 +72,7 @@ export interface Database {
           content: string;
         };
         Update: Partial<MessageRow>;
+        Relationships: [];
       };
       knowledge_items: {
         Row: KnowledgeItemRow;
@@ -80,13 +82,16 @@ export interface Database {
           category: string;
         };
         Update: Partial<KnowledgeItemRow>;
+        Relationships: [];
       };
       operators: {
         Row: OperatorRow;
         Insert: Partial<OperatorRow> & { id: string; email: string; name: string };
         Update: Partial<OperatorRow>;
+        Relationships: [];
       };
     };
+    Views: Record<string, never>;
     Functions: {
       match_knowledge_items: {
         Args: { query_embedding: number[]; match_count?: number };
@@ -94,4 +99,4 @@ export interface Database {
       };
     };
   };
-}
+};

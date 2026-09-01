@@ -31,5 +31,6 @@ export interface EscalationDecision {
     | "undetermined_category"
     | "no_faq_match"
     | "low_confidence"
+    | "return_action"
     | null;
 }
