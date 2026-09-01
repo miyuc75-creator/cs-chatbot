@@ -7,8 +7,8 @@ import { analyzeInquiry } from "@/lib/ai/classify";
 import { generateAnswer } from "@/lib/ai/respond";
 import { decideEscalation, buildHandoffMessage } from "@/lib/ai/escalate";
 import { notifyEscalation } from "@/lib/resend/notify";
-import type { ChatMessage, ChatSendRequest, ChatSendResponse } from "@/types/chat";
-import type { ConversationRow } from "@/types/database";
+import type { ChatMessage, ChatSendRequest, ChatSendResponse, EscalationDecision } from "@/types/chat";
+import type { ConversationRow, MatchKnowledgeItemResult } from "@/types/database";
 
 const requestSchema = z.object({
   conversationId: z.string().uuid().nullable(),
@@ -64,8 +64,20 @@ export async function POST(request: Request) {
     category === "complaint" ||
     category === "undetermined" ||
     (category === "return_exchange" && isActionRequest);
-  const faqMatches = skipsFaqSearch ? [] : await searchKnowledgeItemsForQuestions(subQuestions);
-  const decision = decideEscalation(category, faqMatches, isActionRequest);
+  let faqMatches: MatchKnowledgeItemResult[] = [];
+  let decision: EscalationDecision;
+  if (skipsFaqSearch) {
+    decision = decideEscalation(category, faqMatches, isActionRequest);
+  } else {
+    try {
+      faqMatches = await searchKnowledgeItemsForQuestions(subQuestions);
+      decision = decideEscalation(category, faqMatches, isActionRequest);
+    } catch (error) {
+      // Voyage AIの障害・レート制限時でも顧客への応答自体は継続させ、有人対応へフォールバックする。
+      console.error("FAQ検索に失敗したため、有人対応にフォールバックします:", error);
+      decision = { shouldEscalate: true, reason: "search_unavailable" };
+    }
+  }
 
   if (decision.shouldEscalate && decision.reason) {
     await admin
