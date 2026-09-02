@@ -91,7 +91,7 @@ teigisyo / teiansyo     クライアントから提供された定義書・提�
 - `messages`: `id`, `conversation_id`, `sender`(`customer`|`ai`|`operator`), `content`, `created_at`
 - `knowledge_items`: `id`, `question`, `answer`, `category`, `embedding vector(512)`, `created_at`
 - `operators`: `id`(auth.users参照), `email`, `name`, `role`
-- `app_settings`: `id`(常に1固定の単一行), `escalation_email_to`, `business_start_hour`, `business_end_hour`, `updated_at`(`0008_app_settings.sql`)
+- `app_settings`: `id`(常に1固定の単一行), `escalation_emails`(`text[]`、`0009`で単一文字列から配列化), `business_start_hour`, `business_end_hour`, `updated_at`(`0008_app_settings.sql` / `0009_escalation_emails_array.sql`)
 
 RPC: `match_knowledge_items(query_embedding, match_count)` — pgvectorのコサイン類似度検索(`0004_match_function.sql`)。
 
@@ -136,7 +136,7 @@ RPC: `match_knowledge_items(query_embedding, match_count)` — pgvectorのコサ
 | `ANTHROPIC_API_KEY` | Secret | |
 | `VOYAGE_API_KEY` | Secret | 後述の既知の制約あり |
 | `RESEND_API_KEY` | Secret | |
-| `ESCALATION_EMAIL_TO` | Secret | **未使用(レガシー)**。通知先は`app_settings.escalation_email_to`(`/admin/settings`で編集)に移行済み。削除して問題ない |
+| `ESCALATION_EMAIL_TO` | Secret | **未使用(レガシー)**。通知先は`app_settings.escalation_emails`(複数登録可、`/admin/settings`で編集)に移行済み。削除して問題ない |
 | `NEXT_PUBLIC_APP_URL` | Config | 通知メール内リンクの生成に使用。本番URL確定後に設定必須 |
 | `MOCK_NOW` | 開発専用 | 営業時間判定のテスト用時刻上書き。**本番では絶対に設定しないこと** |
 
@@ -158,6 +158,7 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
   - 類似度閾値0.5(採用): recall 16/18(88.9%)、precision 7/8がクリーンにエスカレーション。残り1件(「芸能人起用」質問)はハルシネーションはしていない(AIが「FAQに記載がなくお答えできかねます」と正直に回答)が、会話ステータスが`ai_active`のままで有人対応に自動で切り替わらないという運用上の抜け穴が判明。顧客が自分で「オペレーターに相談」を押さない限り放置される。recall改善(+4件)の方が大きいと判断し0.5を採用したが、この抜け穴は未解消(セクション10参照)
 - FAQ管理画面(`/admin/faq`): 追加・編集したFAQが実際にRAG検索(`/api/chat`)から即座に参照されること、削除したFAQが検索されなくなること、非operator(匿名顧客)からは引き続き`knowledge_items`に一切アクセスできないことを実機で確認済み
 - 通知・営業時間設定画面(`/admin/settings`): 営業時間を0-24時に変更するとエスカレーション文言の「営業時間外」案内が実際に消えること、通知先メールアドレスの変更が保存・反映されることを確認済み(確認後、本番データは元の値に復元済み)
+- 通知先メールアドレスの複数登録(`escalation_emails`配列): 管理画面から2件登録・保存できること、エスカレーション時に配列がResend APIへ正しく渡ることを確認済み(2件目はResendのサンドボックス制限で実際の送信は422になったが、実装自体の問題ではない。確認後、本番データは1件に復元済み)
 
 ## 7. 既知の制約・技術的負債
 
@@ -166,9 +167,9 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
 - **React StrictModeでの匿名サインイン二重発火**: `components/chat/ChatWindow.tsx`で`useRef`ガードにより修正済み(修正前は開発時にレート制限を無駄に消費し、「セッション開始に失敗しました」の原因になっていた)。
 - **オペレーターの自己登録UIなし**: 意図的な設計(README/定義書に明記)。追加はSupabase Studioでの手動作業が必要(運用マニュアル参照)。
 - **`types/database.ts`は手書き**: `supabase gen types typescript`等での自動生成に切り替えると、マイグレーション変更時の型ズレを防げる。
-- **通知メール送信先は単一のみ**: 複数人への通知が必要になった場合は`lib/resend/notify.ts`の`to`を配列対応させる改修が必要。
 - **自動テスト(unit/e2e)が存在しない**: 現状は手動検証のみ。CI導入時はPlaywright等でのe2eテスト整備を推奨。
 - **`/admin/faq`での変更は`data/faq.csv`に反映されない**: `knowledge_items`テーブルが実運用データの正となり、CSVは初期シード時点のスナップショットのまま残る。CSVをバックアップ目的で最新化したい場合は、別途エクスポート機能を実装するか手動でテーブル内容をコピーする必要がある。
+- **Resendの送信元が`onboarding@resend.dev`のまま**: Resendの無料/未検証ドメイン状態だと、実在しないテストドメイン宛のメールなどで送信が拒否される制限がある(実際に踏んだ)。実在するメールアドレス宛であれば通常問題ないが、本番運用では独自ドメインを検証してから送信元に設定することを推奨。
 
 ## 8. デプロイ
 
