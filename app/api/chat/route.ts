@@ -119,7 +119,7 @@ async function escalateConversation(
     .update({ status: "waiting_operator", category })
     .eq("id", conversationId);
 
-  const reply = await insertMessage(admin, conversationId, "ai", buildHandoffMessage(reason));
+  const reply = await insertMessage(admin, conversationId, "ai", await buildHandoffMessage(reason));
 
   await notifyEscalation(conversationId, category);
 
