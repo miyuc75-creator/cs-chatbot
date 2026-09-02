@@ -33,5 +33,6 @@ export interface EscalationDecision {
     | "low_confidence"
     | "return_action"
     | "search_unavailable"
+    | "ai_unavailable"
     | null;
 }

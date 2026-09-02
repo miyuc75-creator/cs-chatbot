@@ -8,7 +8,7 @@ import { generateAnswer } from "@/lib/ai/respond";
 import { decideEscalation, buildHandoffMessage } from "@/lib/ai/escalate";
 import { notifyEscalation } from "@/lib/resend/notify";
 import type { ChatMessage, ChatSendRequest, ChatSendResponse, EscalationDecision } from "@/types/chat";
-import type { ConversationRow, MatchKnowledgeItemResult } from "@/types/database";
+import type { ConversationCategory, ConversationRow, MatchKnowledgeItemResult } from "@/types/database";
 
 const requestSchema = z.object({
   conversationId: z.string().uuid().nullable(),
@@ -56,7 +56,17 @@ export async function POST(request: Request) {
   }
 
   const history = await fetchHistory(admin, conversation.id);
-  const { category, subQuestions, isActionRequest } = await analyzeInquiry(message);
+
+  let category: ConversationCategory;
+  let subQuestions: string[];
+  let isActionRequest: boolean;
+  try {
+    ({ category, subQuestions, isActionRequest } = await analyzeInquiry(message));
+  } catch (error) {
+    // Anthropic APIの障害・過負荷時でも顧客への応答自体は継続させ、有人対応へフォールバックする。
+    console.error("問い合わせ分類に失敗したため、有人対応にフォールバックします:", error);
+    return escalateConversation(admin, conversation.id, null, "ai_unavailable");
+  }
 
   // クレーム・判断不能・返品実行依頼はFAQの一致に関わらず有人対応になるため、
   // Embedding APIの呼び出し(レート制限が厳しい)を節約するためFAQ検索自体を行わない。
@@ -80,31 +90,40 @@ export async function POST(request: Request) {
   }
 
   if (decision.shouldEscalate && decision.reason) {
-    await admin
-      .from("conversations")
-      .update({ status: "waiting_operator", category })
-      .eq("id", conversation.id);
-
-    const reply = await insertMessage(
-      admin,
-      conversation.id,
-      "ai",
-      buildHandoffMessage(decision.reason)
-    );
-
-    await notifyEscalation(conversation.id, category);
-
-    return NextResponse.json(
-      buildResponse(conversation.id, "waiting_operator", category, reply)
-    );
+    return escalateConversation(admin, conversation.id, category, decision.reason);
   }
 
   await admin.from("conversations").update({ category }).eq("id", conversation.id);
 
-  const answer = await generateAnswer(message, faqMatches, history);
+  let answer: string;
+  try {
+    answer = await generateAnswer(message, faqMatches, history);
+  } catch (error) {
+    // Anthropic APIの障害・過負荷時でも顧客への応答自体は継続させ、有人対応へフォールバックする。
+    console.error("回答生成に失敗したため、有人対応にフォールバックします:", error);
+    return escalateConversation(admin, conversation.id, category, "ai_unavailable");
+  }
   const reply = await insertMessage(admin, conversation.id, "ai", answer);
 
   return NextResponse.json(buildResponse(conversation.id, "ai_active", category, reply));
+}
+
+async function escalateConversation(
+  admin: AdminClient,
+  conversationId: string,
+  category: ConversationCategory | null,
+  reason: NonNullable<EscalationDecision["reason"]>
+): Promise<NextResponse> {
+  await admin
+    .from("conversations")
+    .update({ status: "waiting_operator", category })
+    .eq("id", conversationId);
+
+  const reply = await insertMessage(admin, conversationId, "ai", buildHandoffMessage(reason));
+
+  await notifyEscalation(conversationId, category);
+
+  return NextResponse.json(buildResponse(conversationId, "waiting_operator", category, reply));
 }
 
 type AdminClient = ReturnType<typeof createAdminClient>;
