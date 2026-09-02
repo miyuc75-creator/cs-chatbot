@@ -20,10 +20,37 @@ export function ConversationDetail({
   const [status, setStatus] = useState(initialStatus);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isConnected, setIsConnected] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const supabase = createClient();
+
+    // 切断中に届いていた分を含め、会話の最新状態をサーバーから取り直す。
+    async function resync() {
+      const [{ data: messageRows }, { data: conversationRow }] = await Promise.all([
+        supabase
+          .from("messages")
+          .select("id, sender, content, created_at")
+          .eq("conversation_id", conversationId)
+          .order("created_at", { ascending: true }),
+        supabase.from("conversations").select("status").eq("id", conversationId).single(),
+      ]);
+
+      if (messageRows) {
+        setMessages(
+          messageRows.map((m) => ({
+            id: m.id,
+            sender: m.sender,
+            content: m.content,
+            createdAt: m.created_at,
+          }))
+        );
+      }
+      if (conversationRow) {
+        setStatus(conversationRow.status);
+      }
+    }
 
     const channel = supabase
       .channel(`admin-conversation-${conversationId}`)
@@ -62,7 +89,14 @@ export function ConversationDetail({
           setStatus(row.status);
         }
       )
-      .subscribe();
+      .subscribe((subscribeStatus) => {
+        if (subscribeStatus === "SUBSCRIBED") {
+          setIsConnected(true);
+          resync();
+        } else if (subscribeStatus === "CHANNEL_ERROR" || subscribeStatus === "TIMED_OUT" || subscribeStatus === "CLOSED") {
+          setIsConnected(false);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -125,6 +159,11 @@ export function ConversationDetail({
       </div>
 
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-6 py-4">
+        {!isConnected && (
+          <div className="rounded-lg bg-zinc-100 px-4 py-2 text-sm text-zinc-600">
+            接続が不安定です。再接続しています…
+          </div>
+        )}
         {messages.map((message) => (
           <AdminMessageBubble key={message.id} message={message} />
         ))}

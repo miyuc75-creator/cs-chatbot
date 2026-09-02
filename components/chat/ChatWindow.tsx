@@ -15,6 +15,7 @@ export function ChatWindow() {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasStartedAuthRef = useRef(false);
 
@@ -48,6 +49,34 @@ export function ChatWindow() {
     if (!conversationId) return;
 
     const supabase = createClient();
+
+    // 切断中に届いていた分を含め、会話の最新状態をサーバーから取り直す。
+    // (customer/aiのメッセージは自分の送受信で既にstateに反映済みだが、
+    // 再接続時はサーバー側の内容を正として丸ごと置き換える方が確実。)
+    async function resync() {
+      const [{ data: messageRows }, { data: conversationRow }] = await Promise.all([
+        supabase
+          .from("messages")
+          .select("id, sender, content, created_at")
+          .eq("conversation_id", conversationId)
+          .order("created_at", { ascending: true }),
+        supabase.from("conversations").select("status").eq("id", conversationId).single(),
+      ]);
+
+      if (messageRows) {
+        setMessages(
+          messageRows.map((m) => ({
+            id: m.id,
+            sender: m.sender,
+            content: m.content,
+            createdAt: m.created_at,
+          }))
+        );
+      }
+      if (conversationRow) {
+        setStatus(conversationRow.status);
+      }
+    }
 
     const channel = supabase
       .channel(`customer-conversation-${conversationId}`)
@@ -87,7 +116,14 @@ export function ChatWindow() {
           setStatus(row.status);
         }
       )
-      .subscribe();
+      .subscribe((subscribeStatus) => {
+        if (subscribeStatus === "SUBSCRIBED") {
+          setIsConnected(true);
+          resync();
+        } else if (subscribeStatus === "CHANNEL_ERROR" || subscribeStatus === "TIMED_OUT" || subscribeStatus === "CLOSED") {
+          setIsConnected(false);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -170,6 +206,11 @@ export function ChatWindow() {
       </header>
 
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
+        {!isConnected && (
+          <div className="rounded-lg bg-zinc-100 px-4 py-2 text-sm text-zinc-600">
+            接続が不安定です。再接続しています…
+          </div>
+        )}
         {status !== "ai_active" && <StatusBanner status={status} />}
         {messages.length === 0 && (
           <p className="text-sm text-zinc-400">お困りごとをお気軽にご質問ください。</p>
