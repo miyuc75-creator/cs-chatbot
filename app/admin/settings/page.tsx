@@ -10,7 +10,7 @@ export default async function AdminSettingsPage() {
 
   const { data: settings } = await supabase
     .from("app_settings")
-    .select("escalation_email_to, business_start_hour, business_end_hour")
+    .select("escalation_emails, business_start_hour, business_end_hour")
     .eq("id", 1)
     .single();
 

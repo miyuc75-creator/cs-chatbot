@@ -57,7 +57,7 @@ export type MatchKnowledgeItemResult = {
 
 export type AppSettingsRow = {
   id: number;
-  escalation_email_to: string;
+  escalation_emails: string[];
   business_start_hour: number;
   business_end_hour: number;
   updated_at: string;
