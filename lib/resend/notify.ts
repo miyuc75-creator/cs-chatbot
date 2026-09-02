@@ -18,8 +18,8 @@ export async function notifyEscalation(
     return;
   }
 
-  const to = await getEscalationEmailTo();
-  if (!to) {
+  const to = await getEscalationEmails();
+  if (!to || to.length === 0) {
     console.warn("通知先メールアドレスを取得できなかったため、エスカレーション通知をスキップしました。");
     return;
   }
@@ -49,11 +49,11 @@ export async function notifyEscalation(
   }
 }
 
-async function getEscalationEmailTo(): Promise<string | null> {
+async function getEscalationEmails(): Promise<string[] | null> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("app_settings")
-    .select("escalation_email_to")
+    .select("escalation_emails")
     .eq("id", 1)
     .single();
 
@@ -62,5 +62,5 @@ async function getEscalationEmailTo(): Promise<string | null> {
     return null;
   }
 
-  return data.escalation_email_to;
+  return data.escalation_emails;
 }

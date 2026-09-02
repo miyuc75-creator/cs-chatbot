@@ -4,7 +4,7 @@ import { createClient as createServerClient } from "@/lib/supabase/server";
 
 const updateSchema = z
   .object({
-    escalation_email_to: z.string().trim().email(),
+    escalation_emails: z.array(z.string().trim().email()).min(1),
     business_start_hour: z.number().int().min(0).max(23),
     business_end_hour: z.number().int().min(1).max(24),
   })
@@ -25,7 +25,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("app_settings")
-    .select("escalation_email_to, business_start_hour, business_end_hour")
+    .select("escalation_emails, business_start_hour, business_end_hour")
     .eq("id", 1)
     .single();
 
@@ -54,13 +54,13 @@ export async function PATCH(request: Request) {
       { status: 400 }
     );
   }
-  const { escalation_email_to, business_start_hour, business_end_hour } = parseResult.data;
+  const { escalation_emails, business_start_hour, business_end_hour } = parseResult.data;
 
   const { data, error } = await supabase
     .from("app_settings")
-    .update({ escalation_email_to, business_start_hour, business_end_hour })
+    .update({ escalation_emails, business_start_hour, business_end_hour })
     .eq("id", 1)
-    .select("escalation_email_to, business_start_hour, business_end_hour")
+    .select("escalation_emails, business_start_hour, business_end_hour")
     .single();
 
   if (error) {
