@@ -55,6 +55,14 @@ export type MatchKnowledgeItemResult = {
   similarity: number;
 };
 
+export type AppSettingsRow = {
+  id: number;
+  escalation_email_to: string;
+  business_start_hour: number;
+  business_end_hour: number;
+  updated_at: string;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -88,6 +96,12 @@ export type Database = {
         Row: OperatorRow;
         Insert: Partial<OperatorRow> & { id: string; email: string; name: string };
         Update: Partial<OperatorRow>;
+        Relationships: [];
+      };
+      app_settings: {
+        Row: AppSettingsRow;
+        Insert: Partial<AppSettingsRow>;
+        Update: Partial<AppSettingsRow>;
         Relationships: [];
       };
     };

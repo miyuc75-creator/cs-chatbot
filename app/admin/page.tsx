@@ -35,6 +35,9 @@ export default async function AdminInquiryListPage() {
           <Link href="/admin/faq" className="hover:underline">
             FAQ管理
           </Link>
+          <Link href="/admin/settings" className="hover:underline">
+            通知設定
+          </Link>
           <span>{operator.name}</span>
           <LogoutButton />
         </div>

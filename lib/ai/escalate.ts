@@ -1,4 +1,4 @@
-import { isWithinBusinessHours } from "./business-hours";
+import { getBusinessHours, isWithinBusinessHours } from "./business-hours";
 import type { ConversationCategory, MatchKnowledgeItemResult } from "@/types/database";
 import type { EscalationDecision } from "@/types/chat";
 
@@ -65,12 +65,18 @@ const HANDOFF_MESSAGES: Record<NonNullable<EscalationDecision["reason"]>, string
     "只今AIによる自動応答が混み合っております。恐れ入りますが、オペレーターより改めてご案内いたします。少々お待ちください。",
 };
 
-const OUT_OF_HOURS_SUFFIX =
-  "\n\nただいま営業時間外(10:00〜18:00)のため、翌営業日にオペレーターが対応いたします。";
-
 // 有人対応への引き継ぎ時に顧客へ表示する定型メッセージを生成する。
 // 営業時間外の場合は、翌営業日対応になる旨を追記する(定義書「2. 有人対応・営業時間」)。
-export function buildHandoffMessage(reason: NonNullable<EscalationDecision["reason"]>): string {
+// 営業時間は管理画面(app_settings)で設定可能なため、案内文言もその設定値に合わせて生成する。
+export async function buildHandoffMessage(
+  reason: NonNullable<EscalationDecision["reason"]>
+): Promise<string> {
   const base = HANDOFF_MESSAGES[reason];
-  return isWithinBusinessHours() ? base : `${base}${OUT_OF_HOURS_SUFFIX}`;
+  if (await isWithinBusinessHours()) {
+    return base;
+  }
+
+  const { start, end } = await getBusinessHours();
+  const suffix = `\n\nただいま営業時間外(${start}:00〜${end}:00)のため、翌営業日にオペレーターが対応いたします。`;
+  return `${base}${suffix}`;
 }

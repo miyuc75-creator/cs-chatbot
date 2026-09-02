@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     await notifyEscalation(conversationId, conversation.category);
   }
 
-  const message = buildHandoffMessage("customer_requested");
+  const message = await buildHandoffMessage("customer_requested");
   const { data: reply, error } = await admin
     .from("messages")
     .insert({ conversation_id: conversationId, sender: "ai", content: message })
