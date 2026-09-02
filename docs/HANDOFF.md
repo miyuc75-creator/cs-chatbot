@@ -112,9 +112,10 @@ RPC: `match_knowledge_items(query_embedding, match_count)` — pgvectorのコサ
 7. `complaint`/`undetermined`/`return_exchange`+action の場合はFAQ検索自体をスキップ(Embedding APIコール節約)
 8. それ以外は`searchKnowledgeItemsForQuestions()`でFAQをベクトル検索
    - **フォールバック**: この呼び出しが例外を投げた場合(Voyage AIの障害・レート制限など)、500エラーにせず`search_unavailable`理由で有人対応へエスカレーションする(`d59a8fe`で修正)
-9. `decideEscalation()`でエスカレーション要否を判定(閾値: 類似度0.6未満は低信頼度として有人対応)
+9. `decideEscalation()`でエスカレーション要否を判定(閾値: 類似度0.5未満は低信頼度として有人対応。元は0.6だったが実測比較の上で変更、詳細はescalate.tsのコメントとセクション6参照)
 10. エスカレーションする場合: ステータス更新→定型応答をinsert→`notifyEscalation()`でResendメール送信
 11. しない場合: `generateAnswer()` (Claude Sonnet)でFAQ+会話履歴を元に回答生成→insert
+    - **フォールバック**: `analyzeInquiry()`・`generateAnswer()`もAnthropic API側の過負荷(529)や認証エラーで失敗し得る。両方ともtry/catchし、失敗時は`ai_unavailable`理由で有人対応へエスカレーションする共通ヘルパー`escalateConversation()`を使う(以前はここが未処理で500エラーになっていた)
 
 ## 5. 環境変数
 
@@ -139,10 +140,15 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
 すべて実機(ローカルdevサーバー / 本番Vercel)で確認済み。自動テストコードとしては存在しないため、大きな変更時は同様の手動/スクリプト検証を推奨。
 
 - `case4-test-conversations.csv` の8シナリオ全て合格(FAQ自動応答×3、エスカレーション×2、ハルシネーション抑制、営業時間外、複数質問FAQ参照)
-- RLS: 別セッション(別の匿名顧客)から他人の`conversations`/`messages`をREST APIで直接読もうとして空配列が返ること、オペレーターへのなりすましinsertが403で拒否されることを確認
+- RLS: 別セッション(別の匿名顧客)から他人の`conversations`/`messages`をREST APIで直接読もうとして空配列が返ること、オペレーターへのなりすましinsertが403で拒否されることを確認。加えて、**顧客が`operators`テーブルへ自己昇格しようとする攻撃**(403で拒否)、**自分の会話の`status`を直接UPDATEしようとする攻撃**、**自分のメッセージを事後改ざん・削除しようとする攻撃**(いずれも0行更新で無害化されることをservice role経由で確認)もテスト済み
 - Realtime: 顧客Bのチャンネル購読では顧客Aの新着メッセージが届かないことを確認(RLSがRealtimeにも効いている)
 - 管理画面: ログイン→返信→ステータス変更(対応中/完了)→顧客側へのRealtime即時反映を一通り確認
 - Voyage AI障害時のフォールバック: APIキーを意図的に無効化し、500ではなく有人対応への正常なエスカレーションになることを確認
+- Anthropic API障害時のフォールバック: 同様にAPIキーを無効化し、`analyzeInquiry`/`generateAnswer`どちらの失敗経路でも500にならず`ai_unavailable`で有人対応へ切り替わることを確認
+- Realtime切断・再接続: `context.setOffline()`でオフラインを再現し、切断中にDBへ直接挿入されたメッセージが再接続後の`resync()`で正しく復元されることを確認。またメッセージ送信中に再接続が重なっても自分の発言が消えない(送信完了を待ってからresyncする)ことも回帰確認済み
+- **AI応答精度の定量評価**: FAQ18問の言い換え質問(recall検証)+FAQ外8問(precision/ハルシネーション検証)、計26問で測定。
+  - 類似度閾値0.6: recall 12/18(66.7%)、precision 8/8(100%、ハルシネーションなし)
+  - 類似度閾値0.5(採用): recall 16/18(88.9%)、precision 7/8がクリーンにエスカレーション。残り1件(「芸能人起用」質問)はハルシネーションはしていない(AIが「FAQに記載がなくお答えできかねます」と正直に回答)が、会話ステータスが`ai_active`のままで有人対応に自動で切り替わらないという運用上の抜け穴が判明。顧客が自分で「オペレーターに相談」を押さない限り放置される。recall改善(+4件)の方が大きいと判断し0.5を採用したが、この抜け穴は未解消(セクション10参照)
 
 ## 7. 既知の制約・技術的負債
 
@@ -179,3 +185,4 @@ DBマイグレーションはSupabase CLIでリモートにリンクして`supab
 - オペレーター管理UI(自己登録・一覧・削除)の追加
 - 自動テスト(e2e)のCI組み込み
 - `types/database.ts`の自動生成化
+- **AIが自ら回答を断ったのに有人対応へ切り替わらない抜け穴の解消**: `generateAnswer()`の出力に「オペレーターにご確認」等の断り文言が含まれる場合、事後的に`waiting_operator`へ強制エスカレーションする仕組みを追加する(セクション6のprecision検証で発見、未実装)
