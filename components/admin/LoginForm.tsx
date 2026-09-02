@@ -64,9 +64,15 @@ export function LoginForm({ initialError }: { initialError?: string }) {
       <button
         type="submit"
         disabled={isSubmitting}
-        className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+        className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
       >
-        ログイン
+        {isSubmitting && (
+          <span
+            aria-hidden="true"
+            className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+          />
+        )}
+        {isSubmitting ? "ログイン中…" : "ログイン"}
       </button>
     </form>
   );
