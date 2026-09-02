@@ -18,6 +18,11 @@ export function ChatWindow() {
   const [isConnected, setIsConnected] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasStartedAuthRef = useRef(false);
+  const isSendingRef = useRef(false);
+
+  useEffect(() => {
+    isSendingRef.current = isSending;
+  }, [isSending]);
 
   useEffect(() => {
     // StrictModeの開発時二重実行でsignInAnonymously()が2回走り、
@@ -50,11 +55,20 @@ export function ChatWindow() {
     const activeConversationId = conversationId;
 
     const supabase = createClient();
+    let cancelled = false;
 
     // 切断中に届いていた分を含め、会話の最新状態をサーバーから取り直す。
     // (customer/aiのメッセージは自分の送受信で既にstateに反映済みだが、
     // 再接続時はサーバー側の内容を正として丸ごと置き換える方が確実。)
     async function resync() {
+      // メッセージ送信中(サーバーへの保存が完了する前)にresyncすると、
+      // まだ反映されていないサーバー側の状態で上書きしてしまい、
+      // 送信直後の自分の発言が一瞬消えることがあるため、送信完了を待つ。
+      while (isSendingRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      if (cancelled) return;
+
       const [{ data: messageRows }, { data: conversationRow }] = await Promise.all([
         supabase
           .from("messages")
@@ -127,6 +141,7 @@ export function ChatWindow() {
       });
 
     return () => {
+      cancelled = true;
       supabase.removeChannel(channel);
     };
   }, [conversationId]);
