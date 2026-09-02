@@ -1,0 +1,181 @@
+# 技術引き継ぎドキュメント
+
+このドキュメントは、本プロジェクト（ECサイト向けAIカスタマーサポートチャットボット）を
+引き継ぐ開発者向けの技術資料です。非エンジニア向けの資料は別途
+「セットアップガイド」「運用マニュアル」（Googleドキュメント）を参照してください。
+
+対象読者: このコードベースを保守・拡張するエンジニア。
+
+## 1. 技術スタック
+
+| 領域 | 技術 |
+|---|---|
+| フレームワーク | Next.js 16 (App Router, Turbopack) |
+| 言語 | TypeScript |
+| UI | React 19 / Tailwind CSS 4 |
+| DB / Auth / Realtime | Supabase (Postgres + pgvector) |
+| LLM (分類・回答生成) | Anthropic Claude (Haiku: 分類 / Sonnet: 回答生成) |
+| Embedding (FAQ検索) | Voyage AI (`voyage-3-lite`) |
+| メール通知 | Resend |
+| ホスティング | Vercel |
+| ソース管理 | GitHub (`miyuc75-creator/cs-chatbot`) |
+
+バリデーションは `zod`、CSVパースは `csv-parse` を使用。
+
+## 2. ディレクトリ構成
+
+```
+app/
+  page.tsx                  ルート("/") → /chat へリダイレクトのみ
+  layout.tsx                ルートレイアウト
+  chat/page.tsx             顧客向けチャット画面
+  admin/
+    login/page.tsx          オペレーターログイン
+    page.tsx                問い合わせ一覧(Server Component, RLS依存)
+    [id]/page.tsx            問い合わせ詳細(Server Component)
+  api/
+    chat/route.ts            顧客メッセージ送信のコアロジック(分類→FAQ検索→エスカレーション判定→回答生成)
+    chat/escalate/route.ts   顧客からの「オペレーターに相談」ボタン
+    admin/reply/route.ts     オペレーター返信
+    admin/status/route.ts    ステータス変更(対応中/完了)
+    health/route.ts          ヘルスチェック(knowledge_items件数を返す)
+
+components/
+  chat/        顧客チャットUI(ChatWindow, MessageBubble, StatusBanner)
+  admin/       管理画面UI(ConversationDetail, AdminMessageBubble, LoginForm, LogoutButton)
+
+lib/
+  ai/
+    classify.ts       Claude Haikuで問い合わせをカテゴリ分類+質問分解+action判定
+    respond.ts        Claude SonnetでFAaiベース回答を生成
+    escalate.ts       エスカレーション要否の判定ロジック(ビジネスルールの中核)
+    business-hours.ts 営業時間判定(MOCK_NOWで開発時上書き可能)
+    client.ts         Anthropicクライアント初期化
+  rag/
+    embed.ts          Voyage AIでEmbedding生成(query/document)
+    search.ts         pgvectorのRPC(match_knowledge_items)呼び出し・複数質問のマージ
+  supabase/
+    client.ts         ブラウザ用Supabaseクライアント(@supabase/ssr, Cookie連携)
+    server.ts         Server Component/Route Handler用(Cookie読み書き)
+    admin.ts          service roleクライアント(RLSバイパス、API Route内でのみ使用)
+    require-operator.ts  管理画面の認可ガード
+  resend/notify.ts    エスカレーション発生時のメール通知
+  labels.ts           カテゴリ/ステータスの日本語ラベル
+
+types/
+  database.ts   Supabaseテーブル型・Database型定義(手書き。生成コマンドは未整備)
+  chat.ts       API入出力・EscalationDecision型
+  faq.ts        FAQ CSV/レコード型
+
+supabase/migrations/  DBマイグレーション(6ファイル、番号順に適用)
+scripts/import-faq.ts FAQ CSV→Embedding生成→knowledge_items全洗い替え投入
+data/faq.csv           FAQ原本データ
+proxy.ts                Next.js 16のmiddleware相当(旧middleware.ts)。Supabaseセッションcookieのリフレッシュ
+docs/HANDOFF.md         本ドキュメント
+case4-test-conversations.csv  統合テストシナリオ(8件、後述)
+teigisyo / teiansyo     クライアントから提供された定義書・提案書(要件の一次情報源)
+```
+
+## 3. データモデル
+
+`supabase/migrations/0002_tables.sql` で定義。
+
+- `conversations`: `id`, `customer_id`(auth.users参照), `status`, `category`, timestamps
+  - status: `ai_active` | `waiting_operator` | `operator_active` | `completed`
+  - category: `return_exchange` | `product_question` | `general_question` | `complaint` | `undetermined`
+- `messages`: `id`, `conversation_id`, `sender`(`customer`|`ai`|`operator`), `content`, `created_at`
+- `knowledge_items`: `id`, `question`, `answer`, `category`, `embedding vector(512)`, `created_at`
+- `operators`: `id`(auth.users参照), `email`, `name`, `role`
+
+RPC: `match_knowledge_items(query_embedding, match_count)` — pgvectorのコサイン類似度検索(`0004_match_function.sql`)。
+
+### RLS (Row Level Security)
+
+`0003_rls_policies.sql` で全テーブルにRLSを有効化。要点:
+
+- `conversations`/`messages`: 顧客は `customer_id = auth.uid()` の自分の行のみselect/insert可能。オペレーターは`operators`テーブルに存在すれば全件select可能(update/insertも同様に権限分岐)。
+- `knowledge_items`: ポリシー未定義 = anon/authenticatedからは一切アクセス不可(デフォルト拒否)。FAQ検索は必ず`lib/supabase/admin.ts`のservice roleクライアント経由でAPI Route内から行う設計。
+- Supabase Realtimeの`postgres_changes`もRLSに従う。**実際にAブラウザ→B別セッションで購読しても他人のメッセージが届かないことを検証済み**(下記セクション6参照)。
+
+`0005_security_hardening.sql`でpgvector拡張のスキーマ移動、関数のsearch_path固定などLinter指摘への対応済み。
+`0006_realtime.sql`で`messages`/`conversations`をRealtime publicationに追加。
+
+## 4. コアフロー: `POST /api/chat` (`app/api/chat/route.ts`)
+
+1. Cookieから顧客の匿名認証セッションを取得(未認証なら401)
+2. リクエストをzodでバリデーション
+3. `conversationId`があれば既存会話を取得(customer_id一致を確認)、なければ新規作成
+4. 顧客メッセージをservice roleクライアントで`messages`にinsert
+5. 会話が既に`ai_active`でない(＝既に有人対応済み)場合、AIは処理せず定型の受付メッセージのみ返す
+   - **重要な仕様**: 一度有人対応にエスカレーションした会話は、以後AIが一切介入しない(定義書「9. 有人対応条件」)。同じ会話内でFAQで答えられる質問を送っても定型文しか返らないのは仕様。新しい会話(ページリロード)なら通常通りAIが応答する。
+6. `analyzeInquiry()` (Claude Haiku)でカテゴリ分類・質問分解・action判定
+7. `complaint`/`undetermined`/`return_exchange`+action の場合はFAQ検索自体をスキップ(Embedding APIコール節約)
+8. それ以外は`searchKnowledgeItemsForQuestions()`でFAQをベクトル検索
+   - **フォールバック**: この呼び出しが例外を投げた場合(Voyage AIの障害・レート制限など)、500エラーにせず`search_unavailable`理由で有人対応へエスカレーションする(`d59a8fe`で修正)
+9. `decideEscalation()`でエスカレーション要否を判定(閾値: 類似度0.6未満は低信頼度として有人対応)
+10. エスカレーションする場合: ステータス更新→定型応答をinsert→`notifyEscalation()`でResendメール送信
+11. しない場合: `generateAnswer()` (Claude Sonnet)でFAQ+会話履歴を元に回答生成→insert
+
+## 5. 環境変数
+
+`.env.local.example` 参照。本番(Vercel)では以下の方針で登録済み:
+
+| 変数 | 種別 | 備考 |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Config | ブラウザに公開される前提の値 |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Config | 同上。Vercel CLIは「credentialらしき値」として警告するが、RLSで保護される設計上公開して問題ない |
+| `SUPABASE_SERVICE_ROLE_KEY` | Secret | RLSを全てバイパスする。サーバーサイド(API Route)以外で絶対に使わないこと |
+| `ANTHROPIC_API_KEY` | Secret | |
+| `VOYAGE_API_KEY` | Secret | 後述の既知の制約あり |
+| `RESEND_API_KEY` | Secret | |
+| `ESCALATION_EMAIL_TO` | Secret | 通知先。カンマ区切り複数対応は未実装 |
+| `NEXT_PUBLIC_APP_URL` | Config | 通知メール内リンクの生成に使用。本番URL確定後に設定必須 |
+| `MOCK_NOW` | 開発専用 | 営業時間判定のテスト用時刻上書き。**本番では絶対に設定しないこと** |
+
+Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値を標準入力パイプで渡す(`echo value \| vercel env add ...`)方式は対話プロンプトの状態がずれて別の変数の値が混入する不具合を実際に踏んだ。**必ず `--value` フラグで明示的に渡すこと**。
+
+## 6. これまでに実施した検証
+
+すべて実機(ローカルdevサーバー / 本番Vercel)で確認済み。自動テストコードとしては存在しないため、大きな変更時は同様の手動/スクリプト検証を推奨。
+
+- `case4-test-conversations.csv` の8シナリオ全て合格(FAQ自動応答×3、エスカレーション×2、ハルシネーション抑制、営業時間外、複数質問FAQ参照)
+- RLS: 別セッション(別の匿名顧客)から他人の`conversations`/`messages`をREST APIで直接読もうとして空配列が返ること、オペレーターへのなりすましinsertが403で拒否されることを確認
+- Realtime: 顧客Bのチャンネル購読では顧客Aの新着メッセージが届かないことを確認(RLSがRealtimeにも効いている)
+- 管理画面: ログイン→返信→ステータス変更(対応中/完了)→顧客側へのRealtime即時反映を一通り確認
+- Voyage AI障害時のフォールバック: APIキーを意図的に無効化し、500ではなく有人対応への正常なエスカレーションになることを確認
+
+## 7. 既知の制約・技術的負債
+
+- **Voyage AIのレート制限**: 支払い方法未登録だと3RPM/10K TPMに制限される。本番運用前に必ず支払い方法を登録すること(でないと軽い同時アクセスでもFAQ検索が失敗し、有人対応への意図しないフォールバックが多発する)。
+- **Supabase匿名サインインのレート制限**: デフォルト30回/時間/IP。クライアントの判断で現状維持だが、実トラフィックが増えたら`Authentication > Rate Limits`で引き上げが必要。
+- **React StrictModeでの匿名サインイン二重発火**: `components/chat/ChatWindow.tsx`で`useRef`ガードにより修正済み(修正前は開発時にレート制限を無駄に消費し、「セッション開始に失敗しました」の原因になっていた)。
+- **オペレーターの自己登録UIなし**: 意図的な設計(README/定義書に明記)。追加はSupabase Studioでの手動作業が必要(運用マニュアル参照)。
+- **`types/database.ts`は手書き**: `supabase gen types typescript`等での自動生成に切り替えると、マイグレーション変更時の型ズレを防げる。
+- **通知メール送信先は単一のみ**: 複数人への通知が必要になった場合は`lib/resend/notify.ts`の`to`を配列対応させる改修が必要。
+- **自動テスト(unit/e2e)が存在しない**: 現状は手動検証のみ。CI導入時はPlaywright等でのe2eテスト整備を推奨。
+
+## 8. デプロイ
+
+- GitHubリポジトリ(`main`ブランチ)とVercelプロジェクトが連携済み。`main`へのpushで自動的にProduction Deploymentが作成される。
+- 個別デプロイURL(`cs-chatbot-xxxxxxxxx-....vercel.app`)は各デプロイごとに固有かつ恒久的に残る点に注意。**常に`https://cs-chatbot-green.vercel.app`(または独自ドメイン設定後はそのドメイン)を正としてアクセスすること**。個別デプロイURLはVercelのDeployment ProtectionによりSSO認証が必要。
+- 環境変数を変更した場合、既存のデプロイには反映されないため、Vercelダッシュボードから明示的に`Redeploy`する必要がある。
+
+## 9. ローカル開発
+
+```bash
+npm install
+cp .env.local.example .env.local   # 値を設定
+npm run dev                        # http://localhost:3000
+npm run import:faq                 # data/faq.csvをknowledge_itemsへ反映
+```
+
+DBマイグレーションはSupabase CLIでリモートにリンクして`supabase db push`、
+またはSupabase StudioのSQL Editorで`supabase/migrations/`配下を番号順に実行。
+
+## 10. 今後の改善候補
+
+- Voyage AI検索失敗時のリトライ/バックオフ実装(現状は1回失敗即エスカレーション)
+- 通知メールの複数宛先対応
+- オペレーター管理UI(自己登録・一覧・削除)の追加
+- 自動テスト(e2e)のCI組み込み
+- `types/database.ts`の自動生成化

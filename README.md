@@ -100,3 +100,7 @@ scripts/       FAQ取り込み等の実行スクリプト
 4. 仕上げ: 統合テスト（`case4-test-conversations.csv` の8シナリオで検証）
 
 詳細は開発計画を参照。
+
+## 技術引き継ぎドキュメント
+
+アーキテクチャ・データモデル・既知の制約などは [docs/HANDOFF.md](docs/HANDOFF.md) を参照。
