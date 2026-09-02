@@ -3,10 +3,17 @@ import type { ConversationCategory, MatchKnowledgeItemResult } from "@/types/dat
 import type { EscalationDecision } from "@/types/chat";
 
 // この類似度を下回るFAQしか見つからない場合は「回答に自信がない」とみなす。
-// voyage-3-lite + 実際のFAQデータで実測したところ、
-// 正しいFAQに一致する質問は0.65〜0.76、無関係な質問は0.30〜0.47程度だったため、
-// その中間の0.6を閾値とする。
-const LOW_CONFIDENCE_THRESHOLD = 0.6;
+// 元は0.6だったが、FAQの言い換え質問26件(18 FAQ言い換え+8件のFAQ外質問)での
+// 実測比較で0.5に変更した:
+//   0.6: recall 12/18(66.7%) / precision 8/8(100%)
+//   0.5: recall 16/18(88.9%) / precision 7/8がクリーンにエスカレーション+1件は
+//        「AIが正直に回答を断ったがステータスはai_activeのまま」という
+//        ハルシネーションではないが運用上の抜け穴のケースが発生
+// recallの改善幅がprecision側の劣化(捏造ではない)を上回ると判断し0.5を採用。
+// 将来的にはAIの回答文に「オペレーターにご確認ください」等の断り文言が
+// 含まれる場合に強制エスカレーションする仕組みを追加すると、この抜け穴を
+// 完全に塞げる(未実装)。
+const LOW_CONFIDENCE_THRESHOLD = 0.5;
 
 // AIのみで判断できる問い合わせかどうかを決定する。
 // 定義書「9. 有人対応条件」: クレーム / 回答不能 / FAQに情報がない / 判断不能 / 信頼度が低い。
