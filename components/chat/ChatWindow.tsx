@@ -47,6 +47,7 @@ export function ChatWindow() {
   // 有人対応中、オペレーターからの返信・ステータス変更を即時反映する。
   useEffect(() => {
     if (!conversationId) return;
+    const activeConversationId = conversationId;
 
     const supabase = createClient();
 
@@ -58,9 +59,9 @@ export function ChatWindow() {
         supabase
           .from("messages")
           .select("id, sender, content, created_at")
-          .eq("conversation_id", conversationId)
+          .eq("conversation_id", activeConversationId)
           .order("created_at", { ascending: true }),
-        supabase.from("conversations").select("status").eq("id", conversationId).single(),
+        supabase.from("conversations").select("status").eq("id", activeConversationId).single(),
       ]);
 
       if (messageRows) {
