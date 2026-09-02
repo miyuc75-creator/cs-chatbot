@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
+import { getCookieOptions } from "@/lib/supabase/cookie-options";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/types/database";
 
@@ -27,6 +28,7 @@ export async function proxy(request: NextRequest) {
           );
         },
       },
+      cookieOptions: getCookieOptions(),
     }
   );
 

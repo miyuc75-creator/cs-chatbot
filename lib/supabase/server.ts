@@ -1,6 +1,7 @@
 import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getCookieOptions } from "./cookie-options";
 import type { Database } from "@/types/database";
 
 // Server Component / Route Handler内でセッション(Cookie)を伴ってSupabaseへアクセスするためのクライアント。
@@ -27,6 +28,7 @@ export async function createClient() {
           }
         },
       },
+      cookieOptions: getCookieOptions(),
     }
   );
 }

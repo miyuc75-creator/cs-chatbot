@@ -64,6 +64,7 @@ lib/
     server.ts         Server Component/Route Handler用(Cookie読み書き)
     admin.ts          service roleクライアント(RLSバイパス、API Route内でのみ使用)
     require-operator.ts  管理画面の認可ガード
+    cookie-options.ts 本番のみCookieをSameSite=None; Secureにする(Shopify等へのiframe埋め込み対応)
   resend/notify.ts    エスカレーション発生時のメール通知
   labels.ts           カテゴリ/ステータスの日本語ラベル
 
@@ -76,6 +77,7 @@ supabase/migrations/  DBマイグレーション(6ファイル、番号順に適
 scripts/import-faq.ts FAQ CSV→Embedding生成→knowledge_items全洗い替え投入(初期シード用、現在は/admin/faqが正の更新経路)
 data/faq.csv           FAQ初期シードデータ(以後の実運用データはknowledge_itemsテーブルが正)
 proxy.ts                Next.js 16のmiddleware相当(旧middleware.ts)。Supabaseセッションcookieのリフレッシュ
+public/widget.js        ECサイト等へ埋め込む1行スクリプト本体(下記セクション11参照)
 docs/HANDOFF.md         本ドキュメント
 case4-test-conversations.csv  統合テストシナリオ(8件、後述)
 teigisyo / teiansyo     クライアントから提供された定義書・提案書(要件の一次情報源)
@@ -159,6 +161,7 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
 - FAQ管理画面(`/admin/faq`): 追加・編集したFAQが実際にRAG検索(`/api/chat`)から即座に参照されること、削除したFAQが検索されなくなること、非operator(匿名顧客)からは引き続き`knowledge_items`に一切アクセスできないことを実機で確認済み
 - 通知・営業時間設定画面(`/admin/settings`): 営業時間を0-24時に変更するとエスカレーション文言の「営業時間外」案内が実際に消えること、通知先メールアドレスの変更が保存・反映されることを確認済み(確認後、本番データは元の値に復元済み)
 - 通知先メールアドレスの複数登録(`escalation_emails`配列): 管理画面から2件登録・保存できること、エスカレーション時に配列がResend APIへ正しく渡ることを確認済み(2件目はResendのサンドボックス制限で実際の送信は422になったが、実装自体の問題ではない。確認後、本番データは1件に復元済み)
+- チャットウィジェット(`public/widget.js`): 別オリジンのページへの埋め込み・iframe開閉・チャット送受信・親ページリロード後のセッション永続化(Chromium/WebKit)・本番ビルドでのCookie属性(`SameSite=None; Secure`)を確認済み(詳細はセクション11)
 
 ## 7. 既知の制約・技術的負債
 
@@ -189,11 +192,48 @@ npm run import:faq                 # data/faq.csvをknowledge_itemsへ反映
 DBマイグレーションはSupabase CLIでリモートにリンクして`supabase db push`、
 またはSupabase StudioのSQL Editorで`supabase/migrations/`配下を番号順に実行。
 
-## 10. 今後の改善候補
+## 11. 顧客向けチャットウィジェット(ECサイトへの埋め込み)
+
+`/chat`ページをiframeで埋め込む形の、1行スクリプト方式のウィジェットを`public/widget.js`として提供している。
+
+### 仕組み
+
+1. 埋め込み先のサイトに以下の1行を追加してもらう。
+   ```html
+   <script src="https://cs-chatbot-green.vercel.app/widget.js"></script>
+   ```
+2. `widget.js`は自身の`<script src>`から自分のオリジンを特定し(`document.currentScript`)、画面右下に丸い吹き出しボタンを注入する。
+3. ボタンクリックで`{origin}/chat`を指す`<iframe>`を開閉する(初回クリック時に`src`をセットして遅延読み込み)。
+4. モバイル(幅480px以下)ではiframeが全画面表示になる。
+
+### クロスオリジン対応(Cookie)
+
+顧客の匿名認証セッションはCookieで管理されているため、埋め込み先(例: Shopifyストア)とアプリ本体(Vercel)が別オリジンになるiframe埋め込みでは、Cookieの`SameSite`属性が重要になる。
+
+- `lib/supabase/cookie-options.ts`で本番環境のみ`SameSite=None; Secure`を設定している(`lib/supabase/client.ts`・`server.ts`・`proxy.ts`の3箇所で共通利用)。
+- ローカル開発(`NODE_ENV !== "production"`)ではこの設定を無効化し、通常の`Lax`のままにしている(`Secure`属性はHTTPS必須で、`http://localhost`での挙動がブラウザにより不安定なため)。
+- **既知の制約**: SafariのITP(Intelligent Tracking Prevention)は、Cookie属性に関わらずサードパーティCookieを既定でブロックする。そのため、Safari上でShopify等に埋め込んだ場合、ページ再読み込みのたびに匿名認証がやり直しになる(セッションが永続化されない)可能性が高い。Chrome/Edge/Firefoxでは現時点で問題なく永続化されることを確認済み(下記セクション6参照)。この制約を完全に解消するには、トップレベルでの認証リダイレクトフローやStorage Access APIの利用など、より大きな設計変更が必要。
+
+### 検証済みの内容
+
+- 別オリジン(ポート違いでシミュレート)のHTMLページに埋め込み、ボタン表示→iframe展開→チャット送受信→FAQ自動応答表示までEnd-to-Endで動作することを確認
+- 親ページのリロードをまたいでセッション(匿名認証)が保持され、匿名サインインが再実行されないことをChromium・WebKit(Playwright)の両方で確認
+- 本番相当のビルド(`npm run build && npm run start`)で、実際にCookieが`SameSite=None; Secure`属性で発行されることを確認
+- **未検証**: 実際のShopifyストアへの埋め込み(開発ストアが用意され次第、クライアント側で検証予定)。実Safari(Playwright付属のWebKitではなくApple製Safari本体)でのITP挙動も未検証。
+
+### Shopifyへの導入手順(概要)
+
+1. Shopify管理画面 → 「オンラインストア」→「テーマ」→ 使用中のテーマの「…」→「コードを編集」
+2. `Layout`フォルダの`theme.liquid`を開く
+3. `</body>`の直前に上記の`<script>`タグを追加して保存
+4. 実際のストアを開き、右下にチャットボタンが表示されることを確認
+
+## 12. 今後の改善候補
 
 - Voyage AI検索失敗時のリトライ/バックオフ実装(現状は1回失敗即エスカレーション)
-- 通知メールの複数宛先対応
 - オペレーター管理UI(自己登録・一覧・削除)の追加
 - 自動テスト(e2e)のCI組み込み
 - `types/database.ts`の自動生成化
 - **AIが自ら回答を断ったのに有人対応へ切り替わらない抜け穴の解消**: `generateAnswer()`の出力に「オペレーターにご確認」等の断り文言が含まれる場合、事後的に`waiting_operator`へ強制エスカレーションする仕組みを追加する(セクション6のprecision検証で発見、未実装)
+- **管理画面一覧のRealtime対応・会話検索機能**: `/admin`の一覧画面に新着のRealtime反映、キーワード/日付での検索・絞り込みが未実装
+- **Safari ITP対応**: サードパーティCookieブロックにより、Safari上でのウィジェット埋め込みではセッションが永続化されない制約が残る
