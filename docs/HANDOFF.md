@@ -33,9 +33,12 @@ app/
     login/page.tsx          オペレーターログイン
     page.tsx                問い合わせ一覧(Server Component, RLS依存)
     [id]/page.tsx            問い合わせ詳細(Server Component)
+    faq/page.tsx             FAQ管理(一覧・追加・編集・削除、非エンジニア向け)
   api/
     chat/route.ts            顧客メッセージ送信のコアロジック(分類→FAQ検索→エスカレーション判定→回答生成)
     chat/escalate/route.ts   顧客からの「オペレーターに相談」ボタン
+    admin/faq/route.ts       FAQ一覧取得・新規追加(Embedding自動生成)
+    admin/faq/[id]/route.ts  FAQ更新(Embedding再生成)・削除
     admin/reply/route.ts     オペレーター返信
     admin/status/route.ts    ステータス変更(対応中/完了)
     health/route.ts          ヘルスチェック(knowledge_items件数を返す)
@@ -68,8 +71,8 @@ types/
   faq.ts        FAQ CSV/レコード型
 
 supabase/migrations/  DBマイグレーション(6ファイル、番号順に適用)
-scripts/import-faq.ts FAQ CSV→Embedding生成→knowledge_items全洗い替え投入
-data/faq.csv           FAQ原本データ
+scripts/import-faq.ts FAQ CSV→Embedding生成→knowledge_items全洗い替え投入(初期シード用、現在は/admin/faqが正の更新経路)
+data/faq.csv           FAQ初期シードデータ(以後の実運用データはknowledge_itemsテーブルが正)
 proxy.ts                Next.js 16のmiddleware相当(旧middleware.ts)。Supabaseセッションcookieのリフレッシュ
 docs/HANDOFF.md         本ドキュメント
 case4-test-conversations.csv  統合テストシナリオ(8件、後述)
@@ -94,7 +97,7 @@ RPC: `match_knowledge_items(query_embedding, match_count)` — pgvectorのコサ
 `0003_rls_policies.sql` で全テーブルにRLSを有効化。要点:
 
 - `conversations`/`messages`: 顧客は `customer_id = auth.uid()` の自分の行のみselect/insert可能。オペレーターは`operators`テーブルに存在すれば全件select可能(update/insertも同様に権限分岐)。
-- `knowledge_items`: ポリシー未定義 = anon/authenticatedからは一切アクセス不可(デフォルト拒否)。FAQ検索は必ず`lib/supabase/admin.ts`のservice roleクライアント経由でAPI Route内から行う設計。
+- `knowledge_items`: 顧客(anon/authenticated、operators非該当)からは引き続き一切アクセス不可(デフォルト拒否)。FAQ検索(`/api/chat`)は必ず`lib/supabase/admin.ts`のservice roleクライアント経由で行う設計。一方`0007_knowledge_items_operator_crud.sql`でoperatorsには全CRUD権限を付与済みで、`/api/admin/faq*`はCookieベースの通常クライアント+RLSでオペレーター限定アクセスを担保している(`/api/admin/reply`等と同じパターン)。
 - Supabase Realtimeの`postgres_changes`もRLSに従う。**実際にAブラウザ→B別セッションで購読しても他人のメッセージが届かないことを検証済み**(下記セクション6参照)。
 
 `0005_security_hardening.sql`でpgvector拡張のスキーマ移動、関数のsearch_path固定などLinter指摘への対応済み。
@@ -149,6 +152,7 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
 - **AI応答精度の定量評価**: FAQ18問の言い換え質問(recall検証)+FAQ外8問(precision/ハルシネーション検証)、計26問で測定。
   - 類似度閾値0.6: recall 12/18(66.7%)、precision 8/8(100%、ハルシネーションなし)
   - 類似度閾値0.5(採用): recall 16/18(88.9%)、precision 7/8がクリーンにエスカレーション。残り1件(「芸能人起用」質問)はハルシネーションはしていない(AIが「FAQに記載がなくお答えできかねます」と正直に回答)が、会話ステータスが`ai_active`のままで有人対応に自動で切り替わらないという運用上の抜け穴が判明。顧客が自分で「オペレーターに相談」を押さない限り放置される。recall改善(+4件)の方が大きいと判断し0.5を採用したが、この抜け穴は未解消(セクション10参照)
+- FAQ管理画面(`/admin/faq`): 追加・編集したFAQが実際にRAG検索(`/api/chat`)から即座に参照されること、削除したFAQが検索されなくなること、非operator(匿名顧客)からは引き続き`knowledge_items`に一切アクセスできないことを実機で確認済み
 
 ## 7. 既知の制約・技術的負債
 
@@ -159,6 +163,7 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
 - **`types/database.ts`は手書き**: `supabase gen types typescript`等での自動生成に切り替えると、マイグレーション変更時の型ズレを防げる。
 - **通知メール送信先は単一のみ**: 複数人への通知が必要になった場合は`lib/resend/notify.ts`の`to`を配列対応させる改修が必要。
 - **自動テスト(unit/e2e)が存在しない**: 現状は手動検証のみ。CI導入時はPlaywright等でのe2eテスト整備を推奨。
+- **`/admin/faq`での変更は`data/faq.csv`に反映されない**: `knowledge_items`テーブルが実運用データの正となり、CSVは初期シード時点のスナップショットのまま残る。CSVをバックアップ目的で最新化したい場合は、別途エクスポート機能を実装するか手動でテーブル内容をコピーする必要がある。
 
 ## 8. デプロイ
 
