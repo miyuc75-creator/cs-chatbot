@@ -47,7 +47,7 @@ app/
 
 components/
   chat/        顧客チャットUI(ChatWindow, MessageBubble, StatusBanner)
-  admin/       管理画面UI(ConversationDetail, AdminMessageBubble, LoginForm, LogoutButton, FaqManager, SettingsForm)
+  admin/       管理画面UI(ConversationList, ConversationDetail, AdminMessageBubble, LoginForm, LogoutButton, FaqManager, SettingsForm)
 
 lib/
   ai/
@@ -161,7 +161,8 @@ Vercelへの環境変数登録時のハマりどころ: `vercel env add` に値�
 - FAQ管理画面(`/admin/faq`): 追加・編集したFAQが実際にRAG検索(`/api/chat`)から即座に参照されること、削除したFAQが検索されなくなること、非operator(匿名顧客)からは引き続き`knowledge_items`に一切アクセスできないことを実機で確認済み
 - 通知・営業時間設定画面(`/admin/settings`): 営業時間を0-24時に変更するとエスカレーション文言の「営業時間外」案内が実際に消えること、通知先メールアドレスの変更が保存・反映されることを確認済み(確認後、本番データは元の値に復元済み)
 - 通知先メールアドレスの複数登録(`escalation_emails`配列): 管理画面から2件登録・保存できること、エスカレーション時に配列がResend APIへ正しく渡ることを確認済み(2件目はResendのサンドボックス制限で実際の送信は422になったが、実装自体の問題ではない。確認後、本番データは1件に復元済み)
-- チャットウィジェット(`public/widget.js`): 別オリジンのページへの埋め込み・iframe開閉・チャット送受信・親ページリロード後のセッション永続化(Chromium/WebKit)・本番ビルドでのCookie属性(`SameSite=None; Secure`)を確認済み(詳細はセクション11)
+- チャットウィジェット(`public/widget.js`): 別オリジンのページへの埋め込み・iframe開閉・チャット送受信・親ページリロード後のセッション永続化(Chromium/WebKit)・本番ビルドでのCookie属性(`SameSite=None; Secure`)を確認済み(詳細はセクション11)。**実際のShopify開発ストアへの埋め込みも実施し、ボタン表示からFAQ自動応答までEnd-to-Endで動作確認済み**(ストアのパスワード保護ページ通過を含む)
+- 問い合わせ一覧のRealtime表示(`ConversationList`): 別セッションで新規会話を作成すると、一覧画面をリロードせずにトップへ即座に反映されることを確認済み。オフライン中に作成された会話も、再接続後のresyncで一覧に反映されることを確認済み
 
 ## 7. 既知の制約・技術的負債
 
@@ -219,7 +220,8 @@ DBマイグレーションはSupabase CLIでリモートにリンクして`supab
 - 別オリジン(ポート違いでシミュレート)のHTMLページに埋め込み、ボタン表示→iframe展開→チャット送受信→FAQ自動応答表示までEnd-to-Endで動作することを確認
 - 親ページのリロードをまたいでセッション(匿名認証)が保持され、匿名サインインが再実行されないことをChromium・WebKit(Playwright)の両方で確認
 - 本番相当のビルド(`npm run build && npm run start`)で、実際にCookieが`SameSite=None; Secure`属性で発行されることを確認
-- **未検証**: 実際のShopifyストアへの埋め込み(開発ストアが用意され次第、クライアント側で検証予定)。実Safari(Playwright付属のWebKitではなくApple製Safari本体)でのITP挙動も未検証。
+- **Shopify開発ストア(`theme.liquid`に`</head>`直後で埋め込み)で実際に検証済み**: パスワード保護ページの通過、チャットボタン表示、メッセージ送受信、FAQ自動応答までEnd-to-Endで確認。なお`{% style %}`ブロック内など誤った位置に貼ると`<script>`がCSSテキストとして無視され動作しないため、`</head>`直後または`<body>`直前への設置が必要(実際にこの配置ミスを一度経験した)。
+- **未検証**: 実Safari(Playwright付属のWebKitではなくApple製Safari本体)でのITP挙動。
 
 ### Shopifyへの導入手順(概要)
 
@@ -235,5 +237,5 @@ DBマイグレーションはSupabase CLIでリモートにリンクして`supab
 - 自動テスト(e2e)のCI組み込み
 - `types/database.ts`の自動生成化
 - **AIが自ら回答を断ったのに有人対応へ切り替わらない抜け穴の解消**: `generateAnswer()`の出力に「オペレーターにご確認」等の断り文言が含まれる場合、事後的に`waiting_operator`へ強制エスカレーションする仕組みを追加する(セクション6のprecision検証で発見、未実装)
-- **管理画面一覧のRealtime対応・会話検索機能**: `/admin`の一覧画面に新着のRealtime反映、キーワード/日付での検索・絞り込みが未実装
+- **会話検索機能**: `/admin`の一覧画面にキーワード/日付での検索・絞り込みが未実装(Realtime表示は`ConversationList`で対応済み)
 - **Safari ITP対応**: サードパーティCookieブロックにより、Safari上でのウィジェット埋め込みではセッションが永続化されない制約が残る
