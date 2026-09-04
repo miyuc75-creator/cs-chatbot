@@ -30,6 +30,8 @@ export function ConversationList({ initialConversations }: { initialConversation
   const [keyword, setKeyword] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<ConversationCategory | "all">("all");
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | "all">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [matchingIds, setMatchingIds] = useState<Set<string> | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -118,13 +120,24 @@ export function ConversationList({ initialConversations }: { initialConversation
   }
 
   const filteredConversations = useMemo(() => {
+    // <input type="date">はローカルタイムの日付文字列(YYYY-MM-DD)を返すため、
+    // その日のローカル00:00〜23:59:59.999として範囲を組み立てる。
+    const fromTime = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
+    const toTime = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
+
     return conversations.filter((c) => {
       if (categoryFilter !== "all" && c.category !== categoryFilter) return false;
       if (statusFilter !== "all" && c.status !== statusFilter) return false;
       if (matchingIds !== null && !matchingIds.has(c.id)) return false;
+      const createdAt = new Date(c.created_at).getTime();
+      if (fromTime !== null && createdAt < fromTime) return false;
+      if (toTime !== null && createdAt > toTime) return false;
       return true;
     });
-  }, [conversations, categoryFilter, statusFilter, matchingIds]);
+  }, [conversations, categoryFilter, statusFilter, matchingIds, dateFrom, dateTo]);
+
+  const isAnyFilterActive =
+    matchingIds !== null || categoryFilter !== "all" || statusFilter !== "all" || dateFrom !== "" || dateTo !== "";
 
   return (
     <div className="flex flex-col">
@@ -162,6 +175,36 @@ export function ConversationList({ initialConversations }: { initialConversation
         </form>
         {searchError && <p className="text-sm text-red-600">{searchError}</p>}
 
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            max={dateTo || undefined}
+            className="rounded-lg border px-3 py-2 text-sm outline-none"
+          />
+          <span className="text-sm text-zinc-500">〜</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            min={dateFrom || undefined}
+            className="rounded-lg border px-3 py-2 text-sm outline-none"
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              type="button"
+              onClick={() => {
+                setDateFrom("");
+                setDateTo("");
+              }}
+              className="rounded-lg border px-3 py-2 text-xs text-zinc-600"
+            >
+              日付をクリア
+            </button>
+          )}
+        </div>
+
         <div className="flex gap-2">
           <select
             value={categoryFilter}
@@ -189,7 +232,7 @@ export function ConversationList({ initialConversations }: { initialConversation
           </select>
         </div>
 
-        {(matchingIds !== null || categoryFilter !== "all" || statusFilter !== "all") && (
+        {isAnyFilterActive && (
           <p className="text-xs text-zinc-500">{filteredConversations.length}件ヒットしました</p>
         )}
       </div>
